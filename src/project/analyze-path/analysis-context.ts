@@ -1,10 +1,9 @@
 import { AnalysisProject, isSupportedAnalysisFile } from "../analysis-project.js";
-import type { SemanticContext, SemanticContextDiagnostic } from "../semantic-context/model.js";
 import { readFile, readdir } from "node:fs/promises";
 import type { InstalledLegendState } from "../legend-state-package.js";
 import type { SourceIndex } from "../source-components/source-components.js";
 import { buildSourceIndexFromFiles } from "../source-components/source-components.js";
-import { createSemanticContext } from "../semantic-context/semantic-context.js";
+import { loadWorkspaceSources } from "../workspace/source-closure.js";
 import path from "node:path";
 import { resolveInstalledLegendState } from "../legend-state-package.js";
 
@@ -24,44 +23,29 @@ const SOURCE_READ_BATCH_SIZE = 64;
 export interface AnalysisContext {
   installedLegendState: InstalledLegendState | null;
   project: AnalysisProject;
-  semanticContext: SemanticContext | null;
-  semanticDiagnostics: readonly SemanticContextDiagnostic[];
   sourceIndex: SourceIndex;
   root: string;
 }
 
-export interface AnalysisContextOptions {
-  /** Build one fail-closed semantic shard from this explicit tsconfig. */
-  configFilePath?: string;
-}
-
-export async function createAnalysisContext(
-  rootPath: string,
-  options: AnalysisContextOptions = {},
-): Promise<AnalysisContext> {
+export async function createAnalysisContext(rootPath: string): Promise<AnalysisContext> {
   const root = path.resolve(rootPath);
   const files = await collectSourceFiles(root);
-  return createAnalysisContextFromFiles(root, files, options);
+  return createAnalysisContextFromFiles(root, files);
 }
 
 export async function createAnalysisContextFromFiles(
   root: string,
   files: readonly string[],
-  options: AnalysisContextOptions,
 ): Promise<AnalysisContext> {
   const sources = new Map<string, string>();
   await readSourceBatch(files, 0, sources);
+  const host = await loadWorkspaceSources(root, sources);
   const project = new AnalysisProject(sources);
-  const semantic = options.configFilePath
-    ? createSemanticContext(project, { configFilePath: options.configFilePath })
-    : { context: null, diagnostics: [] };
   return {
     installedLegendState: await resolveInstalledLegendState(root),
     project,
     root,
-    semanticContext: semantic.context,
-    semanticDiagnostics: semantic.diagnostics,
-    sourceIndex: buildSourceIndexFromFiles(root, project.files),
+    sourceIndex: buildSourceIndexFromFiles(root, project.files, host),
   };
 }
 

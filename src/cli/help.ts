@@ -71,7 +71,7 @@ Output
   Stdout is one JSON document, on success and on failure alike, and nothing
   is written to stderr.
 
-JSON contract (schemaVersion 3)
+JSON contract (schemaVersion 4)
   A completed scan is the report object with:
     status          "ok"
     root            directory every location.file is relative to
@@ -93,9 +93,11 @@ JSON contract (schemaVersion 3)
                     fact (or two, listed in facts) also carries assumption
                     { id, facts, fingerprint, question, ifConfirmed, research,
                     renderCost, updateSites, status }:
-                    read every research step (file, line, check), answer the
-                    yes/no question, and a confirmed id turns the finding into
-                    ifConfirmed
+                    read every research step (file, line, optional lines and
+                    total, check), then answer the yes/no question. A group
+                    reports convertingCount in questions and each member's
+                    outcome in assumption.members; blocked members stay under
+                    review after confirmation
                     A review-effect finding whose verdict waits on a state
                     lists that state's question ids in waitsOn instead
                     A finding a confirmation converted carries verification
@@ -140,6 +142,12 @@ Confirmations
   again instead of silently applied. "yes" converts the finding with the
   assumption recorded in its evidence; "no" keeps it under review and stops
   the question. Work through report.questions in rank order.
+
+Subscription plans
+  report.subscriptionAnalysis (version 1) inventories useValue calls and groups
+  proven child cuts by owner. Static JSX impact is separate from runtime data.
+  Optional evidence: <root>/.legend-doctor/subscription-measurements.json.
+  See REPORT.md for the measurement format and source fingerprint contract.
 
 Suppression
   Precede a deliberate React effect with \`// legend-doctor keep-react-effect\`

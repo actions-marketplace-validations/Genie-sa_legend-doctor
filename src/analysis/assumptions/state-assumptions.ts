@@ -116,16 +116,14 @@ function resolveOnce(
   };
 }
 
+/** Chained hypotheses may repeat the same instruction and its source sites. */
 function dedupeResearch(steps: readonly ResearchStep[]): ResearchStep[] {
-  const seen = new Set<string>();
-  return steps.filter((step) => {
-    const key = `${step.file}:${step.line}:${step.check}`;
-    if (seen.has(key)) {
-      return false;
-    }
-    seen.add(key);
-    return true;
-  });
+  const distinct = new Map<string, ResearchStep>();
+  for (const step of steps) {
+    const key = JSON.stringify([step.file, step.check, step.lines ?? [step.line]]);
+    distinct.set(key, step);
+  }
+  return [...distinct.values()];
 }
 
 function chainSecond(

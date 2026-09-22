@@ -134,11 +134,17 @@ function memberResearch(
       file: scope.reportFile,
       line: lineOf(member.call, sourceFile),
     },
-    ...lines.map((line) => ({
-      check: `this write to \`${member.valueName}\` runs in a handler that also writes other members of ${names}; confirm a render could never observe one member updated without the others`,
-      file: scope.reportFile,
-      line,
-    })),
+    ...(lines.length === 0
+      ? []
+      : [
+          {
+            check: `inspect each write to \`${member.valueName}\` in the connected group ${names}; preserve its branch, await, and exception phase, and verify which same-phase writes must publish together`,
+            file: scope.reportFile,
+            line: lines[0]!,
+            lines,
+            total: new Set(writes.map((call) => call.getStart(sourceFile))).size,
+          },
+        ]),
   ];
 }
 
@@ -148,14 +154,14 @@ function groupQuestion(owner: string, outcomes: readonly GroupOutcome[]): string
   const blocked = outcomes.filter((outcome) => groupConversion(outcome.alone) === null);
   const converts =
     converting.length > 0
-      ? ` A "yes" converts ${quotedList(converting.map(({ member }) => member.valueName))} into one observable object written with a single \`assign\`.`
+      ? ` A "yes" converts ${quotedList(converting.map(({ member }) => member.valueName))} into one observable object with a separate atomic update for each proven synchronous transition.`
       : "";
   const reasons = [...new Set(blocked.map(({ alone }) => remainingLabel(alone)))].join(", ");
   const remains =
     blocked.length > 0
       ? ` ${quotedList(blocked.map(({ member }) => member.valueName))} ${blocked.length === 1 ? "is" : "are"} not converted by this answer (${reasons}); a remaining blocker gets its own question next.`
       : "";
-  return `${names} are written together in ${owner}'s handlers; confirm they change as one atomic transition that no render may observe half-applied.${converts}${remains}`;
+  return `${names} are written together in ${owner}'s handlers; verify the individual write relations in \`transitions\` and confirm a migration that preserves each branch, await, and catch/finally phase. A connected group is not a single atomic transition; synchronous coexecution alone does not authorize merging expressions into one \`assign\`.${converts}${remains}`;
 }
 
 function confirmedVerdict(
@@ -227,7 +233,8 @@ export function groupAssumption(scope: GroupAssumptionScope): GroupAssumptionRes
   const { inputs, members, result } = scope;
   const outcomes = members.map((member) => ({ alone: result.classifyAlone(member), member }));
   const own = outcomes.find(({ member }) => member === inputs.state);
-  if (!own || convertingOutcomes(outcomes).length === 0) {
+  const [firstConversion] = convertingOutcomes(outcomes);
+  if (!own || !firstConversion) {
     return null;
   }
   const owner = runtimeFunctionName(inputs.state.owner) ?? "this owner";
@@ -238,7 +245,7 @@ export function groupAssumption(scope: GroupAssumptionScope): GroupAssumptionRes
       facts: [GROUP_REASON],
       fingerprint,
       id,
-      ifConfirmed: groupConversion(own.alone) ?? "review-state",
+      ifConfirmed: groupConversion(firstConversion.alone)!,
       members: outcomes.map((outcome) => outcomeLabel(outcome)),
       question: groupQuestion(owner, outcomes),
       renderCost: jsxElementCount(inputs.state.owner),

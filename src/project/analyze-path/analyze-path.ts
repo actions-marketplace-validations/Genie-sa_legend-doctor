@@ -1,4 +1,3 @@
-import type { AnalysisDiagnostic, AnalysisFile } from "../analysis-project.js";
 import {
   analysisFileEntries,
   analysisReport,
@@ -13,25 +12,27 @@ import {
 import type { AnalysisContext } from "./analysis-context.js";
 import { AnalysisCoverageLedger } from "../analysis-coverage.js";
 import type { AnalysisCoverageReport } from "../analysis-coverage.js";
+import type { AnalysisDiagnostic } from "../analysis-project.js";
 import type { AnalysisReport } from "../../core/types.js";
 import type { ConfirmationSet } from "../../analysis/assumptions/confirmations.js";
 import { DEFAULT_MATERIALITY } from "../../analysis/constants.js";
 import type { MaterialityPolicy } from "../../analysis/constants.js";
-import type { SemanticContextDiagnostic } from "../semantic-context/model.js";
+import type { SubscriptionMeasurement } from "../../core/subscriptions.js";
+import { attachSubscriptionMeasurements } from "../subscription-measurements.js";
 import path from "node:path";
-import { pathIdentityKey } from "../../core/path-identity.js";
 import { stat } from "node:fs/promises";
+import ts from "typescript";
 
 export interface DetailedAnalysisResult {
   coverage: AnalysisCoverageReport;
   diagnostics: {
     parser: readonly AnalysisDiagnostic[];
-    semantic: readonly SemanticContextDiagnostic[];
   };
   report: AnalysisReport;
 }
 
 export interface AnalyzePathOptions {
+  readonly subscriptionMeasurements?: readonly (SubscriptionMeasurement | null)[];
   /** Answered review questions to honour; a confirmed id converts its review finding. */
   readonly confirmations?: ConfirmationSet | null;
   /**
@@ -76,13 +77,13 @@ async function analyzePathInternal(
     fileFilter,
     materiality = DEFAULT_MATERIALITY,
     sharedContext,
+    subscriptionMeasurements,
   }: AnalyzePathOptions,
   includeDetails: boolean,
 ): Promise<AnalysisReport | DetailedAnalysisResult> {
   const target = await resolveAnalysisTarget(targetPath);
   const context = sharedContext ?? (await createTargetContext(target));
-  const analyzedFiles = fileFilter ? target.files.filter(fileFilter) : target.files;
-  const entries = analysisFileEntries(analyzedFiles, {
+  const entries = analysisFileEntries(fileFilter ? target.files.filter(fileFilter) : target.files, {
     analysisRoot: target.analysisRoot,
     context,
     includeDetails,
@@ -97,24 +98,44 @@ async function analyzePathInternal(
     materiality,
   });
   const report = analysisReport(
-    analyzedFiles.length,
+    entries.length,
     pass,
     fileFilter ? { contextFiles: target.files.length } : null,
   );
+  await attachSubscriptionMeasurements(report, target.analysisRoot, subscriptionMeasurements);
   if (!coverage) {
     return report;
   }
   return {
-    coverage: coverage.report(),
+    coverage: sourceCoverageReport(coverage, entries, { context, root: target.analysisRoot }),
     diagnostics: {
       parser: pass.accumulator.diagnostics,
-      semantic: displaySemanticDiagnostics(
-        context.semanticDiagnostics,
-        entries.flatMap((entry) => (entry.analysisFile ? [entry.analysisFile] : [])),
-        target.analysisRoot,
-      ),
     },
     report,
+  };
+}
+
+function sourceCoverageReport(
+  coverage: AnalysisCoverageLedger,
+  entries: readonly { file: string; reportFileName: string }[],
+  { context, root }: { context: AnalysisContext; root: string },
+): AnalysisCoverageReport {
+  const relative = (file: string): string =>
+    path.relative(ts.sys.realpath?.(root) ?? root, ts.sys.realpath?.(file) ?? file);
+  return {
+    ...coverage.report(),
+    sourceContext: entries.map((entry) => {
+      const source = context.sourceIndex.sourceContextFor(entry.file);
+      return {
+        ...source,
+        file: entry.reportFileName,
+        unavailable: source.unavailable.map((edge) => ({
+          ...edge,
+          importer: relative(edge.importer),
+          resolvedFile: edge.resolvedFile === null ? null : relative(edge.resolvedFile),
+        })),
+      };
+    }),
   };
 }
 
@@ -137,41 +158,6 @@ async function resolveAnalysisTarget(targetPath: string): Promise<AnalysisTarget
 
 function createTargetContext(target: AnalysisTarget): Promise<AnalysisContext> {
   return target.isDirectory
-    ? createAnalysisContextFromFiles(target.analysisRoot, target.files, {})
+    ? createAnalysisContextFromFiles(target.analysisRoot, target.files)
     : createAnalysisContext(target.analysisRoot);
-}
-
-function displaySemanticDiagnostics(
-  diagnostics: readonly SemanticContextDiagnostic[],
-  files: readonly AnalysisFile[],
-  root: string,
-): SemanticContextDiagnostic[] {
-  const fileKeys = new Set(files.map((file) => pathIdentityKey(file.identityPath)));
-  return diagnostics
-    .filter(
-      (diagnostic) =>
-        !diagnostic.fileName ||
-        diagnostic.code === "config-invalid" ||
-        diagnostic.code === "config-read-failed" ||
-        fileKeys.has(pathIdentityKey(diagnostic.fileName)),
-    )
-    .map((diagnostic) => {
-      if (!diagnostic.fileName) {
-        return { ...diagnostic, message: portableDiagnosticMessage(diagnostic.message, root) };
-      }
-      const fileName =
-        path.relative(root, diagnostic.fileName) || path.basename(diagnostic.fileName);
-      return {
-        ...diagnostic,
-        fileName,
-        message: portableDiagnosticMessage(
-          diagnostic.message.replaceAll(diagnostic.fileName, fileName),
-          root,
-        ),
-      };
-    });
-}
-
-function portableDiagnosticMessage(message: string, root: string): string {
-  return message.replaceAll(`${path.resolve(root)}${path.sep}`, "");
 }

@@ -234,6 +234,37 @@ function Avatar({ url$ }: { url$: Observable<string> }) {
 This also shows `move-use-value-down` and `move-use-value-into-child`: the parent passes observable references, not
 rendered values.
 
+### Move one subscription into several children
+
+When one observable feeds separate small parts of a large owner, `move-use-value-down` can name several
+boundaries in one instruction. Move every named read together so the parent no longer subscribes.
+
+```tsx
+function Settings({ enabled$ }: { enabled$: Observable<boolean> }) {
+  return (
+    <main>
+      <UnrelatedSettings />
+      <section>
+        <EnabledInput enabled$={enabled$} label="Vertical" />
+      </section>
+      <aside>
+        <EnabledInput enabled$={enabled$} label="Horizontal" />
+      </aside>
+    </main>
+  );
+}
+
+function EnabledInput({ enabled$, label }: { enabled$: Observable<boolean>; label: string }) {
+  const enabled = useValue(enabled$);
+  return <input aria-label={label} disabled={!enabled} />;
+}
+```
+
+Define the children outside the parent, keep observable ownership unchanged, and pass other inputs as ordinary
+props. Keep the evaluation of those inputs in the parent. If a named boundary contains a conditional, keep the
+whole condition inside its always-mounted child. Prefer one cohesive child when it already isolates the reads;
+separate subscriptions add overhead and are justified only when their combined render work stays small.
+
 ### Remove selector work and legacy names
 
 Use `pass-observable-to-use-value` for a direct value and `replace-legacy-use-value` for old APIs.
@@ -246,7 +277,12 @@ useSelector(profile$.name); // Before
 useValue(profile$.name); // After
 ```
 
-Keep `useValue(() => ...)` when the selector derives a value from one or more observables.
+The same-node synchronous selector rewrite without options is `style`: it selects the same value, with no proven
+render or lifecycle saving. Inside `observer`, direct input can use the enclosing observer's tracking instead of a
+separate selector hook. Async selectors and calls with options remain unchanged because their Promise or tracking
+contracts can differ. An eager `useValue(profile$.name.get())` is still `change`: direct input establishes tracking in
+an ordinary component or avoids redundant selector hooks inside `observer`. Keep `useValue(() => ...)` when the
+selector derives a value from one or more observables, including boolean projections and formatted computed values.
 
 ### Compute a derived primitive as an observable
 
@@ -477,7 +513,7 @@ receives, so a raw array breaks it. `useValue(x$.get())` stays with `pass-observ
 
 ### Split a selector that only builds a literal
 
-`split-use-value-result` changes a destructured selector whose members are direct reads or inert expressions.
+`split-use-value-result` offers a `style` rewrite for a const destructured selector whose members are direct reads or inert expressions.
 
 ```tsx
 const { a, b } = useValue(() => ({ a: state$.a.get(), b: state$.b.get() })); // Before
@@ -485,9 +521,12 @@ const a = useValue(state$.a); // After
 const b = useValue(state$.b);
 ```
 
-The selector returns a new object on every tracked change, so each destructured consumer sees a fresh identity.
-Per-path subscriptions render on exactly the same changes and compare by value. Results used whole, block bodies,
-spreads, defaults, rest elements, computed members, and calls stay as they are.
+The aggregate object is fresh; its destructured values retain their own identities. This rewrite removes the result
+allocation and adds per-path subscriptions. It does not prove fewer owner renders, lower CPU cost, or less native
+work. Every observable read must remain represented, including reads in otherwise unused fields: they may invalidate
+ref-backed render snapshots. Omitted effects, duplicate properties, mutable declarations, results used whole, block
+bodies, async selectors, prototype-setting properties, reordered reads, spreads, defaults, rest elements, computed
+members, and calls stay as they are.
 
 ## Keep effect timing correct
 

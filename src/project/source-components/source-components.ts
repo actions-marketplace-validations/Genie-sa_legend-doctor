@@ -17,13 +17,20 @@ import {
 import { cachedModuleResolutionHost, normalizeFile, resolveModule } from "./module-resolution.js";
 import { contextProviderSitesFor, contextReaderHooksFor } from "./context-readers.js";
 import type { AnalysisFile } from "../analysis-project.js";
+import type { SourceContextCoverage } from "./source-context.js";
+import { callbackPackageVersion } from "./callback-package-version.js";
 import { isFrameworkEventModuleSpecifier } from "./framework-event-components.js";
 import { moduleRecord } from "./module-record.js";
 import { observableArrayPathsFor } from "./observable-array-paths.js";
 import { observablePathsFor } from "./observable-containers.js";
+import { observablePrimitivePathsFor } from "./observable-primitive-paths.js";
+import { sourceContextFor } from "./source-context.js";
 import type ts from "typescript";
 
 export interface SourceIndex {
+  moduleFileFor: (file: string, specifier: string) => string | null;
+  callbackPackageVersionFor: (file: string, specifier: string) => string | null;
+  sourceContextFor: (file: string) => SourceContextCoverage;
   componentDeclarationFor: (file: string, name: string) => ResolvedSymbol | null;
   componentsFor: (file: string) => ReadonlySet<string>;
   contextProviderSitesFor: (file: string, contextName: string) => number;
@@ -39,6 +46,7 @@ export interface SourceIndex {
   hookDeclarationFor: (file: string, name: string) => ResolvedSymbol | null;
   legendValueBridgesFor: (file: string) => ReadonlyMap<string, ReadonlySet<string>>;
   observableArrayPathsFor: (file: string) => ReadonlySet<string>;
+  observablePrimitivePathsFor: (file: string) => ReadonlySet<string>;
   observableFactoriesFor: (file: string) => ReadonlySet<string>;
   observableKeysFor: (file: string) => ReadonlyMap<string, ReadonlySet<string>>;
   observablePathsFor: (file: string) => ReadonlySet<string>;
@@ -54,9 +62,13 @@ export function buildSourceIndex(root: string, sources: ReadonlyMap<string, stri
 export function buildSourceIndexFromFiles(
   root: string,
   files: readonly AnalysisFile[],
+  host?: ts.ModuleResolutionHost,
 ): SourceIndex {
-  const state = createSourceIndexState(root, files);
+  const state = createSourceIndexState(root, files, host);
   return {
+    moduleFileFor: (file, specifier) => resolveModule(state, file, specifier),
+    callbackPackageVersionFor: (file, specifier) => callbackPackageVersion(state, file, specifier),
+    sourceContextFor: (file) => sourceContextFor(state, file),
     componentDeclarationFor: (file, name) => componentDeclarationFor(state, file, name),
     componentsFor: (file) => new Set(resolvedFor(state, file, "component").keys()),
     contextProviderSitesFor: (file, contextName) =>
@@ -68,6 +80,7 @@ export function buildSourceIndexFromFiles(
     hookDeclarationFor: (file, name) => hookDeclarationFor(state, file, name),
     legendValueBridgesFor: (file) => legendValueBridgesFor(state, file),
     observableArrayPathsFor: (file) => observableArrayPathsFor(state, file),
+    observablePrimitivePathsFor: (file) => observablePrimitivePathsFor(state, file),
     observableFactoriesFor: (file) =>
       new Set(resolvedFor(state, file, "observable-factory").keys()),
     observableKeysFor: (file) => observableKeysFor(state, file),
@@ -77,10 +90,18 @@ export function buildSourceIndexFromFiles(
   };
 }
 
-function createSourceIndexState(root: string, files: readonly AnalysisFile[]): SourceIndexState {
+function createSourceIndexState(
+  root: string,
+  files: readonly AnalysisFile[],
+  host?: ts.ModuleResolutionHost,
+): SourceIndexState {
   const records = new Map<string, ModuleRecord>();
   const sourceFiles = new Map<string, ts.SourceFile>();
   for (const file of files) {
+    // Parser recovery is useful for diagnostics, but cannot establish a dependency's contract.
+    if (file.parserDiagnostics.some((diagnostic) => diagnostic.category === "error")) {
+      continue;
+    }
     const normalized = normalizeFile(file.identityPath);
     records.set(normalized, moduleRecord(file.sourceFile));
     sourceFiles.set(normalized, file.sourceFile);
@@ -94,7 +115,7 @@ function createSourceIndexState(root: string, files: readonly AnalysisFile[]): S
     configFilesByDirectory: new Map(),
     contextReaders: new Map(),
     contextReadersBySymbol: new Map(),
-    moduleResolutionHost: cachedModuleResolutionHost(new Set(records.keys())),
+    moduleResolutionHost: host ?? cachedModuleResolutionHost(new Set(records.keys())),
     records,
     resolvedByKind: new Map(),
     resolvedHooks: new Map(),

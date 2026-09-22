@@ -1,9 +1,13 @@
+import type { SubscriptionAnalysis, SubscriptionCut } from "./subscriptions.js";
+import type { StateTransitionEvidence } from "./state-transitions.js";
+
 type Confidence = "certain" | "probable";
 
 // oxlint-disable-next-line eslint/no-magic-numbers -- Public JSON protocol version.
-const SCHEMA_VERSION = 3 as const;
+const SCHEMA_VERSION = 4 as const;
 
 type AbstentionReason =
+  | "async-command-origin-unresolved"
   | "atomic-transition-unproven"
   | "binding-shape-unsupported"
   | "callback-timing-unresolved"
@@ -24,15 +28,21 @@ type AssumptionAnswer = "no" | "yes";
 
 type AssumptionStatus = "confirmed" | "open" | "rejected" | "stale";
 
-/** One place an agent must read to answer a review question, and what to verify there. */
+/** One research instruction and the source sites where it applies. */
 interface ResearchStep {
   check: string;
   file: string;
   line: number;
+  /** All source lines for this instruction, including the first. */
+  lines?: number[];
+  /** Total source sites, including several occurrences on the same line. */
+  total?: number;
 }
 
 /** An open review question ordered by the renders an answer is expected to save. */
 interface RankedQuestion {
+  /** Present for a group: members converted by this answer. */
+  convertingCount?: number;
   file: string;
   id: string;
   ifConfirmed: StateAssumption["ifConfirmed"];
@@ -67,7 +77,7 @@ interface StateAssumption {
   fingerprint: string;
   /** Stable across line shifts: report file, owner name, state name, and blocker reasons. */
   id: string;
-  /** The action this finding takes once the assumption is confirmed. */
+  /** The confirmed action, or the first converting member's action for a group. */
   ifConfirmed: AssumptionOutcome;
   /** Present on co-written group questions: every member and its outcome once the group is confirmed. */
   members?: AssumptionGroupMember[];
@@ -105,6 +115,8 @@ type EffectAction =
 type HookAction = StateAction | EffectAction;
 
 type LegendPracticeAction =
+  | "select-primitive-projection"
+  | "review-helper-tracking"
   | "assign-observable-fields"
   | "batch-observable-writes"
   | "derive-computed-observable"
@@ -139,6 +151,10 @@ interface Verification {
 }
 
 interface HookFindingBase {
+  /** Direct write locations and pairwise execution evidence for grouped states. */
+  transitions?: StateTransitionEvidence;
+  /** Triage guidance for review findings; never an authorization to apply a conversion. */
+  review?: ReviewGuidance;
   /** Present on review findings with a confirmable blocker, and on findings a confirmation converted. */
   assumption?: StateAssumption;
   /** Present on findings a confirmation converted: the runtime check that validates the answer. */
@@ -156,7 +172,7 @@ interface HookFindingBase {
     primary: boolean;
   };
   location: SourceLocation;
-  /** Present when the compact tier admitted an owner below the default broad-owner size. */
+  /** Present when compact mode changes the action or makes a new conversion confirmable. */
   materiality?: "compact";
   message: string;
   name: string | null;
@@ -172,6 +188,21 @@ interface HookFindingBase {
   };
 }
 
+interface ReviewGuidance {
+  /** Known blockers from this verdict and its question; not an exhaustive proof inventory. */
+  blockers: AbstentionReason[];
+  kind:
+    | "confirm"
+    | "recheck"
+    | "declined"
+    | "dependency"
+    | "unsupported"
+    | "no-proven-benefit"
+    | "investigate";
+  /** The next concrete investigation or answer to supply. */
+  next: string;
+}
+
 type HookFinding = HookFindingBase &
   (
     | {
@@ -185,9 +216,10 @@ type HookFinding = HookFindingBase &
   );
 
 interface LegendPracticeFinding {
+  subscription?: SubscriptionCut;
   action: LegendPracticeAction;
   confidence: Confidence;
-  disposition: "change" | "style";
+  disposition: "change" | "style" | "candidate";
   evidence: readonly string[];
   location: SourceLocation;
   message: string;
@@ -208,6 +240,7 @@ interface ReportConfirmations {
 }
 
 interface AnalysisReport {
+  subscriptionAnalysis?: SubscriptionAnalysis;
   /** Present when a confirmations file was supplied. */
   confirmations?: ReportConfirmations;
   files: number;
@@ -278,6 +311,7 @@ export type {
   ReportConfirmations,
   ReportScope,
   ResearchStep,
+  ReviewGuidance,
   SourceLocation,
   StateAction,
   StateAssumption,
